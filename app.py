@@ -4,11 +4,6 @@ import pandas as pd
 import re
 from datetime import datetime, timedelta
 
-t1 = datetime.combine(f["date"], datetime.strptime(f["arr_time"], "%H:%M").time())
-t2 = datetime.combine(next_f["date"], datetime.strptime(next_f["dep_time"], "%H:%M").time())
-
-delta_hours = (t2 - t1).total_seconds() / 3600
-
 st.set_page_config(page_title="Crew Allowance Calculator V3", layout="wide")
 
 st.title("✈️ Crew Allowance Calculator V3 (FULL AUTO + BARÈME)")
@@ -104,25 +99,32 @@ def build_rotations(flights):
 
 
 # --- ANALYSIS (MODIFIÉE SELON TES RÈGLES) ---
-def analyze_rotation(rot, allowances):
-    countries = []
-    nights_out = 0
+from datetime import datetime, timedelta
 
-    for i, f in enumerate(rot):
-        country = AIRPORT_COUNTRY.get(f["arr"], None)
-        if country:
-            countries.append(country)
+for i, f in enumerate(rot):
+    country = AIRPORT_COUNTRY.get(f["arr"], None)
+    if country:
+        countries.append(country)
 
-        if i < len(rot)-1:
-            next_f = rot[i+1]
-            if f["arr_time"] and next_f["dep_time"]:
-                t1 = datetime.strptime(f["arr_time"], "%H:%M")
-                t2 = datetime.strptime(next_f["dep_time"], "%H:%M")
-                delta = (t2 - t1).seconds / 3600
-                if delta < 0:
-                    delta += 24
-                if delta > 8:
-                    nights_out += 1
+    if i < len(rot) - 1:
+        next_f = rot[i + 1]
+
+        if f["arr_time"] and next_f["dep_time"] and f["date"] and next_f["date"]:
+
+            t1 = datetime.combine(
+                f["date"],
+                datetime.strptime(f["arr_time"], "%H:%M").time()
+            )
+
+            t2 = datetime.combine(
+                next_f["date"],
+                datetime.strptime(next_f["dep_time"], "%H:%M").time()
+            )
+
+            delta_hours = (t2 - t1).total_seconds() / 3600
+
+            if delta_hours >= 8:
+                nights_out += 1
 
     unique_countries = list(set(countries))
     total_days = nights_out + 1

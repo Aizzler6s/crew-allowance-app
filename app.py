@@ -1,95 +1,195 @@
 import streamlit as st
 import pdfplumber
+import pandas as pd
 import re
+from datetime import datetime
 
-st.title("✈️ Crew Allowance FIX (AIMS horizontal REAL)")
+st.set_page_config(page_title="Crew Allowance Calculator V5", layout="wide")
 
-uploaded_file = st.file_uploader("Upload AIMS PDF", type=["pdf"])
+st.title("✈️ Crew Allowance Calculator V5 (SIMPLE NIGHT LOGIC)")
+
+uploaded_file = st.file_uploader("Upload ton planning AIMS", type=["pdf"])
+allowance_file = st.file_uploader("Upload ton barème indemnités", type=["pdf", "csv"])
 
 HOME_BASE = "CDG"
 
 
-# ---------------- EXTRACT TEXT ----------------
-def extract_text(pdf_file):
-    text_pages = []
+# ---------------- BARÈME ----------------
+def load_allowances(file):
+    allowances = {}
+
+    if file.name.endswith(".csv"):
+        df = pd.read_csv(file)
+        for _, row in df.iterrows():
+            allowances[row["Pays"]] = float(row["Montant"])
+
+    else:
+        with pdfplumber.open(file) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text()
+                if not text:
+                    continue
+
+                for line in text.split("\n"):
+                    matches = re.findall(r"([A-Za-z\-\(\) ]+)\s+(\d{2,3}) €", line)
+                    for country, value in matches:
+                        allowances[country.strip()] = float(value)
+
+    return allowances
+
+
+# ---------------- AIRPORT MAP ----------------
+AIRPORT_COUNTRY = {
+    "CDG": "France", "NCE": "France", "LYS": "France", "NTE": "France",
+    "KRK": "Pologne", "RAK": "Maroc", "EDI": "Grande-Bretagne",
+    "LTN": "Grande-Bretagne", "LGW": "Grande-Bretagne",
+    "SSH": "Égypte", "RBA": "Maroc",
+    "LIN": "Italie", "MXP": "Italie", "GOA": "Italie",
+    "BUD": "Hongrie", "BEG": "Serbie"
+}
+
+
+# ---------------- PARSE AIMS ----------------
+def extract_flights(pdf_file):
+    flights = []
+    current_date = None
 
     with pdfplumber.open(pdf_file) as pdf:
         for page in pdf.pages:
             text = page.extract_text()
-            if text:
-                text_pages.append(text)
+            if not text:
+                continue
 
-    return "\n".join(text_pages)
+            for line in text.split("\n"):
+
+                date_match = re.match(r"(\d{2}/\d{2}/\d{4})", line)
+                if date_match:
+                    current_date = datetime.strptime(date_match.group(1), "%d/%m/%Y").date()
+
+                routes = re.findall(r"([A-Z]{3})\s+-\s+([A-Z]{3})", line)
+                times = re.findall(r"A?(\d{2}:\d{2})", line)
+
+                for i, (dep, arr) in enumerate(routes):
+                    dep_time = times[i * 2] if len(times) > i * 2 else None
+                    arr_time = times[i * 2 + 1] if len(times) > i * 2 + 1 else None
+
+                    flights.append({
+                        "date": current_date,
+                        "dep": dep,
+                        "arr": arr,
+                        "dep_time": dep_time,
+                        "arr_time": arr_time
+                    })
+
+    return flights
 
 
-# ---------------- PARSE DAYS ----------------
-def parse_days(text):
+# ---------------- ROTATIONS ----------------
+def build_rotations(flights):
+    rotations = []
+    current = []
 
-    # split by potential day markers (AIMS often uses DD or DD/MM)
-    blocks = re.split(r"(\d{2}/\d{2}|\n\d{1,2}\s)", text)
+    for f in flights:
+        current.append(f)
 
-    days = []
-
-    current = ""
-
-    for b in blocks:
-        if not b:
-            continue
-
-        # detect new day
-        if re.match(r"\d{2}/\d{2}", b) or re.match(r"\n\d{1,2}\s", b):
-            if current:
-                days.append(current)
-            current = b
-        else:
-            current += b
+        if f["arr"] == HOME_BASE:
+            rotations.append(current)
+            current = []
 
     if current:
-        days.append(current)
+        rotations.append(current)
 
-    return days
+    return rotations
 
 
-# ---------------- DETECT CDG ----------------
-def analyze_days(days):
+# ---------------- NIGHT STOP LOGIC (ULTRA SIMPLE) ----------------
+def compute_night_stop(rot):
 
-    if not days:
-        return {"error": "no data"}
+    if not rot:
+        return 0
 
-    last_day = days[-1]
+    # 👉 règle simple : dernier vol de la rotation
+    last_flight = rot[-1]
 
-    # check CDG presence in last day
-    last_has_cdg = HOME_BASE in last_day
+    # si le dernier vol revient à CDG → PAS de night stop
+    if last_flight["arr"] == HOME_BASE:
+        return 0
 
-    # NIGHT STOP RULE SIMPLE (CORRECT)
-    if last_has_cdg:
-        nights = 0
-        rule = "Cas A (retour CDG -0.5)"
+    # sinon → night stop
+    return 1
+
+
+# ---------------- ANALYSIS ----------------
+def analyze_rotation(rot, allowances):
+
+    countries = []
+
+    for f in rot:
+        country = AIRPORT_COUNTRY.get(f["arr"])
+        if country:
+            countries.append(country)
+
+    unique_countries = list(set(countries))
+
+    # -------- NIGHT STOP --------
+    nights_out = compute_night_stop(rot)
+    total_days = nights_out + 1
+
+    # -------- CAS LOGIC --------
+    if rot[-1]["arr"] == HOME_BASE:
+        indemnities = total_days - 0.5
+        case = "Cas A (retour CDG -0.5)"
     else:
-        nights = 1
-        rule = "Cas B (night stop)"
+        indemnities = total_days
+        case = "Cas B (night stop)"
+
+    # -------- RATE --------
+    rates = []
+
+    for c in unique_countries:
+        for key in allowances:
+            if c.lower() in key.lower():
+                rates.append(allowances[key])
+
+    if not rates:
+        rates = [177]
+
+    avg_rate = sum(rates) / len(rates)
+    total_eur = indemnities * avg_rate
 
     return {
-        "Night stop": nights,
-        "Règle": rule,
-        "CDG dernier jour": last_has_cdg
+        "Route": " → ".join([f"{f['dep']}-{f['arr']}" for f in rot]),
+        "Pays": ", ".join(unique_countries),
+        "Night stop": nights_out,
+        "Règle": case,
+        "Indemnités": round(indemnities, 2),
+        "Taux €": round(avg_rate, 2),
+        "Total €": round(total_eur, 2)
     }
 
 
 # ---------------- MAIN ----------------
-if uploaded_file:
+if uploaded_file and allowance_file:
 
-    text = extract_text(uploaded_file)
+    allowances = load_allowances(allowance_file)
+    flights = extract_flights(uploaded_file)
+    rotations = build_rotations(flights)
 
-    days = parse_days(text)
+    results = [analyze_rotation(r, allowances) for r in rotations]
+    df = pd.DataFrame(results)
 
-    result = analyze_days(days)
+    st.subheader("📊 Résultat détaillé")
+    st.dataframe(df, use_container_width=True)
 
-    st.subheader("🧠 Résultat")
-    st.write(result)
+    st.subheader("💰 Totaux")
+    st.metric("Total indemnités", round(df["Indemnités"].sum(), 2))
+    st.metric("Total €", f"{round(df['Total €'].sum(), 2)} €")
 
-    st.subheader("🔎 DEBUG (jours détectés)")
-    st.write(days)
+    st.download_button(
+        "📥 Télécharger CSV",
+        df.to_csv(index=False),
+        "indemnites.csv"
+    )
 
 else:
-    st.info("Upload ton PDF AIMS")
+    st.info("Upload ton planning AIMS + ton barème pour lancer le calcul.")

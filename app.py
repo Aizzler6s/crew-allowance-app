@@ -6,12 +6,13 @@ from datetime import datetime
 
 st.set_page_config(page_title="Crew Allowance Calculator V3", layout="wide")
 
-st.title("✈️ Crew Allowance Calculator V3 (FULL AUTO + BARÈME)")
+st.title("✈️ Crew Allowance Calculator V3 (CLEAN + FIXED LOGIC)")
 
 uploaded_file = st.file_uploader("Upload ton planning AIMS", type=["pdf"])
 allowance_file = st.file_uploader("Upload ton barème indemnités", type=["pdf", "csv"])
 
 HOME_BASE = "CDG"
+
 
 # ---------------- BARÈME ----------------
 def load_allowances(file):
@@ -21,15 +22,17 @@ def load_allowances(file):
         df = pd.read_csv(file)
         for _, row in df.iterrows():
             allowances[row["Pays"]] = float(row["Montant"])
+
     else:
         with pdfplumber.open(file) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
                 if not text:
                     continue
+
                 for line in text.split("\n"):
-                    match = re.findall(r"([A-Za-z\-\(\) ]+)\s+(\d{2,3}) €", line)
-                    for country, value in match:
+                    matches = re.findall(r"([A-Za-z\-\(\) ]+)\s+(\d{2,3}) €", line)
+                    for country, value in matches:
                         allowances[country.strip()] = float(value)
 
     return allowances
@@ -37,18 +40,21 @@ def load_allowances(file):
 
 # ---------------- AIRPORT MAP ----------------
 AIRPORT_COUNTRY = {
-    "CDG":"France","NCE":"France","LYS":"France","NTE":"France",
-    "KRK":"Pologne","RAK":"Maroc","EDI":"Grande-Bretagne","LTN":"Grande-Bretagne","LGW":"Grande-Bretagne",
-    "SSH":"Égypte","RBA":"Maroc","LIN":"Italie","MXP":"Italie","GOA":"Italie",
-    "BUD":"Hongrie","BEG":"Serbie"
+    "CDG": "France", "NCE": "France", "LYS": "France", "NTE": "France",
+    "KRK": "Pologne", "RAK": "Maroc", "EDI": "Grande-Bretagne",
+    "LTN": "Grande-Bretagne", "LGW": "Grande-Bretagne",
+    "SSH": "Égypte", "RBA": "Maroc",
+    "LIN": "Italie", "MXP": "Italie", "GOA": "Italie",
+    "BUD": "Hongrie", "BEG": "Serbie"
 }
 
+
 # ---------------- PARSE AIMS ----------------
-def extract_flights(pdf):
+def extract_flights(pdf_file):
     flights = []
     current_date = None
 
-    with pdfplumber.open(pdf) as pdf:
+    with pdfplumber.open(pdf_file) as pdf:
         for page in pdf.pages:
             text = page.extract_text()
             if not text:
@@ -56,6 +62,7 @@ def extract_flights(pdf):
 
             for line in text.split("\n"):
 
+                # detect date
                 date_match = re.match(r"(\d{2}/\d{2}/\d{4})", line)
                 if date_match:
                     current_date = datetime.strptime(date_match.group(1), "%d/%m/%Y").date()
@@ -64,8 +71,8 @@ def extract_flights(pdf):
                 times = re.findall(r"A?(\d{2}:\d{2})", line)
 
                 for i, (dep, arr) in enumerate(routes):
-                    dep_time = times[i*2] if len(times) > i*2 else None
-                    arr_time = times[i*2+1] if len(times) > i*2+1 else None
+                    dep_time = times[i * 2] if len(times) > i * 2 else None
+                    arr_time = times[i * 2 + 1] if len(times) > i * 2 + 1 else None
 
                     flights.append({
                         "date": current_date,
@@ -85,6 +92,7 @@ def build_rotations(flights):
 
     for f in flights:
         current.append(f)
+
         if f["arr"] == HOME_BASE:
             rotations.append(current)
             current = []
@@ -95,41 +103,51 @@ def build_rotations(flights):
     return rotations
 
 
+# ---------------- NIGHT STOP LOGIC FIXED ----------------
+def detect_night_stop(rot):
+    """
+    1 rotation = max 1 night stop (realistic AIMS logic)
+    """
+    if not rot:
+        return 0
+
+    last_airport = rot[-1]["arr"]
+
+    # Cas retour base → pas de night stop
+    if last_airport == HOME_BASE:
+        return 0
+
+    # sinon rotation terminée hors base → 1 night stop
+    return 1
+
+
 # ---------------- ANALYSIS ----------------
 def analyze_rotation(rot, allowances):
+
     countries = []
-    nights_out = 0
 
-    for i, f in enumerate(rot):
-
+    for f in rot:
         country = AIRPORT_COUNTRY.get(f["arr"])
         if country:
             countries.append(country)
 
-        # -------- NIGHT STOP LOGIC (SAFE) --------
-        if i < len(rot) - 1:
-            next_f = rot[i + 1]
-
-            if f["arr"] != HOME_BASE and f["date"] and next_f["date"]:
-
-                days_gap = (next_f["date"] - f["date"]).days
-
-                if days_gap >= 1:
-                    nights_out += 1
-
     unique_countries = list(set(countries))
-    total_days = nights_out + 1
+    total_days = len(rotations)
 
-    # -------- CAS LOGIC --------
+    # -------- NIGHT STOP --------
+    nights_out = detect_night_stop(rot)
+
+    # -------- CAS A / B --------
     if rot[-1]["arr"] == HOME_BASE:
-        indemnities = total_days - 0.5   # Cas A
+        indemnities = (nights_out + 1) - 0.5
         case = "Cas A (retour CDG -0.5)"
     else:
-        indemnities = total_days         # Cas B
+        indemnities = nights_out + 1
         case = "Cas B (night stop)"
 
     # -------- RATE --------
     rates = []
+
     for c in unique_countries:
         for key in allowances:
             if c.lower() in key.lower():
@@ -144,7 +162,6 @@ def analyze_rotation(rot, allowances):
     return {
         "Route": " → ".join([f"{f['dep']}-{f['arr']}" for f in rot]),
         "Pays": ", ".join(unique_countries),
-        "Jours": total_days,
         "Nuits dehors": nights_out,
         "Règle": case,
         "Indemnités": round(indemnities, 2),
@@ -177,4 +194,4 @@ if uploaded_file and allowance_file:
     )
 
 else:
-    st.info("Upload ton planning AIMS + ton barème pour calcul automatique complet.")
+    st.info("Upload ton planning AIMS + ton barème pour lancer le calcul.")

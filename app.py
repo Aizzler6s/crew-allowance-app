@@ -21,7 +21,6 @@ def load_allowances(file):
         df = pd.read_csv(file)
         for _, row in df.iterrows():
             allowances[row["Pays"]] = float(row["Montant"])
-
     else:
         with pdfplumber.open(file) as pdf:
             for page in pdf.pages:
@@ -53,6 +52,7 @@ def analyze_excel(df, allowances):
 
     results = []
 
+    # 🔥 FIX erreurs float
     df = df.fillna("").astype(str)
 
     for col in df.columns:
@@ -60,7 +60,7 @@ def analyze_excel(df, allowances):
         col_data = df[col]
 
         # ignorer colonne vide
-        if not any(col_data):
+        if not any(cell.strip() for cell in col_data):
             continue
 
         cells = col_data.tolist()
@@ -68,8 +68,8 @@ def analyze_excel(df, allowances):
         # ---------------- ROUTES ----------------
         routes = []
         for cell in cells:
-            match = re.findall(r"([A-Z]{3})-([A-Z]{3})", cell)
-            for dep, arr in match:
+            matches = re.findall(r"([A-Z]{3})-([A-Z]{3})", cell)
+            for dep, arr in matches:
                 routes.append(f"{dep}-{arr}")
 
         # ---------------- PAYS ----------------
@@ -86,11 +86,11 @@ def analyze_excel(df, allowances):
 
         if has_cdg:
             indemnities = 1 - 0.5
-            case = "Cas A"
+            case = "Cas A (retour CDG -0.5)"
             nights = 0
         else:
             indemnities = 1
-            case = "Cas B"
+            case = "Cas B (night stop)"
             nights = 1
 
         # ---------------- TAUX ----------------
@@ -120,23 +120,35 @@ def analyze_excel(df, allowances):
 
     return pd.DataFrame(results)
 
+
 # ---------------- MAIN ----------------
 if uploaded_file and allowance_file:
 
-    df = pd.read_excel(uploaded_file, header=None)
+    # gestion XLS / XLSX
+    if uploaded_file.name.endswith(".xls"):
+        df = pd.read_excel(uploaded_file, engine="xlrd", header=None)
+    else:
+        df = pd.read_excel(uploaded_file, engine="openpyxl", header=None)
+
     allowances = load_allowances(allowance_file)
 
     st.subheader("📊 Planning")
     st.dataframe(df, use_container_width=True)
 
-   df_results = analyze_excel(df, allowances)
+    df_results = analyze_excel(df, allowances)
 
-st.subheader("📊 Résultat détaillé")
-st.dataframe(df_results, use_container_width=True)
+    st.subheader("📊 Résultat détaillé")
+    st.dataframe(df_results, use_container_width=True)
 
-st.subheader("💰 Totaux")
-st.metric("Total indemnités", round(df_results["Indemnités"].sum(), 2))
-st.metric("Total €", f"{round(df_results['Total €'].sum(), 2)} €")
+    st.subheader("💰 Totaux")
+    st.metric("Total indemnités", round(df_results["Indemnités"].sum(), 2))
+    st.metric("Total €", f"{round(df_results['Total €'].sum(), 2)} €")
+
+    st.download_button(
+        "📥 Télécharger CSV",
+        df_results.to_csv(index=False),
+        "indemnites.csv"
+    )
 
 else:
     st.info("Upload ton planning Excel + ton barème")

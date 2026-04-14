@@ -104,27 +104,19 @@ def analyze_rotation(rot, allowances):
     nights_out = 0
 
     for i, f in enumerate(rot):
-        country = AIRPORT_COUNTRY.get(f["arr"], None)
-        if country:
-            countries.append(country)
 
-        if i < len(rot) - 1:
-            next_f = rot[i + 1]
+    if i < len(rot) - 1:
+        next_f = rot[i + 1]
 
-            if f["arr_time"] and next_f["dep_time"] and f["date"] and next_f["date"]:
-                t1 = datetime.combine(
-                    f["date"],
-                    datetime.strptime(f["arr_time"], "%H:%M").time()
-                )
+        # on check uniquement les layovers
+        if f["arr"] != HOME_BASE:
 
-                t2 = datetime.combine(
-                    next_f["date"],
-                    datetime.strptime(next_f["dep_time"], "%H:%M").time()
-                )
+            if f["date"] and next_f["date"]:
 
-                delta_hours = (t2 - t1).total_seconds() / 3600
+                days_gap = (next_f["date"] - f["date"]).days
 
-                if delta_hours >= 8:
+                # vraie nuit dehors = changement de jour réel OU overnight logique
+                if days_gap >= 1:
                     nights_out += 1
 
     unique_countries = list(set(countries))

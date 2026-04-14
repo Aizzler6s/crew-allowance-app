@@ -51,57 +51,74 @@ AIRPORT_COUNTRY = {
 # ---------------- ANALYSE EXCEL ----------------
 def analyze_excel(df, allowances):
 
-    # dernière colonne = dernier jour
-    last_col = df.iloc[:, -1].astype(str)
+    results = []
 
-    # toutes les cellules
-    all_cells = df.astype(str).values.flatten()
+    df = df.fillna("").astype(str)
 
-    # ---------------- NIGHT STOP ----------------
-    has_cdg_last = last_col.str.contains(HOME_BASE).any()
+    for col in df.columns:
 
-    if has_cdg_last:
-        nights = 0
-        indemnities = 1 - 0.5
-        case = "Cas A (retour CDG -0.5)"
-    else:
-        nights = 1
-        indemnities = 1
-        case = "Cas B (night stop)"
+        col_data = df[col]
 
-    # ---------------- PAYS ----------------
-    countries = []
+        # ignorer colonne vide
+        if not any(col_data):
+            continue
 
-    for cell in all_cells:
-        for airport in AIRPORT_COUNTRY:
-            if airport in cell:
-                countries.append(AIRPORT_COUNTRY[airport])
+        cells = col_data.tolist()
 
-    unique_countries = list(set(countries))
+        # ---------------- ROUTES ----------------
+        routes = []
+        for cell in cells:
+            match = re.findall(r"([A-Z]{3})-([A-Z]{3})", cell)
+            for dep, arr in match:
+                routes.append(f"{dep}-{arr}")
 
-    # ---------------- TAUX ----------------
-    rates = []
+        # ---------------- PAYS ----------------
+        countries = []
+        for cell in cells:
+            for airport in AIRPORT_COUNTRY:
+                if airport in cell:
+                    countries.append(AIRPORT_COUNTRY[airport])
 
-    for c in unique_countries:
-        for key in allowances:
-            if c.lower() in key.lower():
-                rates.append(allowances[key])
+        unique_countries = list(set(countries))
 
-    if not rates:
-        rates = [177]  # fallback
+        # ---------------- NIGHT STOP ----------------
+        has_cdg = any("CDG" in cell for cell in cells)
 
-    avg_rate = sum(rates) / len(rates)
-    total_eur = indemnities * avg_rate
+        if has_cdg:
+            indemnities = 1 - 0.5
+            case = "Cas A"
+            nights = 0
+        else:
+            indemnities = 1
+            case = "Cas B"
+            nights = 1
 
-    return {
-        "Pays détectés": ", ".join(unique_countries),
-        "Night stop": nights,
-        "Règle": case,
-        "Indemnités": round(indemnities, 2),
-        "Taux moyen €": round(avg_rate, 2),
-        "Total €": round(total_eur, 2)
-    }
+        # ---------------- TAUX ----------------
+        rates = []
 
+        for c in unique_countries:
+            for key in allowances:
+                if c.lower() in key.lower():
+                    rates.append(allowances[key])
+
+        if not rates:
+            rates = [177]
+
+        avg_rate = sum(rates) / len(rates)
+        total_eur = indemnities * avg_rate
+
+        results.append({
+            "Jour": col,
+            "Routes": " → ".join(routes),
+            "Pays": ", ".join(unique_countries),
+            "Night stop": nights,
+            "Règle": case,
+            "Indemnités": round(indemnities, 2),
+            "Taux €": round(avg_rate, 2),
+            "Total €": round(total_eur, 2)
+        })
+
+    return pd.DataFrame(results)
 
 # ---------------- MAIN ----------------
 if uploaded_file and allowance_file:
@@ -112,10 +129,14 @@ if uploaded_file and allowance_file:
     st.subheader("📊 Planning")
     st.dataframe(df, use_container_width=True)
 
-    result = analyze_excel(df, allowances)
+   df_results = analyze_excel(df, allowances)
 
-    st.subheader("🧠 Résultat")
-    st.write(result)
+st.subheader("📊 Résultat détaillé")
+st.dataframe(df_results, use_container_width=True)
+
+st.subheader("💰 Totaux")
+st.metric("Total indemnités", round(df_results["Indemnités"].sum(), 2))
+st.metric("Total €", f"{round(df_results['Total €'].sum(), 2)} €")
 
 else:
     st.info("Upload ton planning Excel + ton barème")

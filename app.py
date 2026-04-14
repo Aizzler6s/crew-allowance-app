@@ -2,7 +2,12 @@ import streamlit as st
 import pdfplumber
 import pandas as pd
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
+
+t1 = datetime.combine(f["date"], datetime.strptime(f["arr_time"], "%H:%M").time())
+t2 = datetime.combine(next_f["date"], datetime.strptime(next_f["dep_time"], "%H:%M").time())
+
+delta_hours = (t2 - t1).total_seconds() / 3600
 
 st.set_page_config(page_title="Crew Allowance Calculator V3", layout="wide")
 
@@ -50,16 +55,19 @@ EURO_COUNTRIES = [
 # --- PARSE AIMS PDF ---
 def extract_flights(pdf):
     flights = []
+    current_date = None
+
     with pdfplumber.open(pdf) as pdf:
         for page in pdf.pages:
             text = page.extract_text()
             lines = text.split("\n")
-            current_date = None
 
             for line in lines:
+
+                # si on trouve une date → on met à jour
                 date_match = re.match(r"(\d{2}/\d{2}/\d{4})", line)
                 if date_match:
-                    current_date = datetime.strptime(date_match.group(1), "%d/%m/%Y")
+                    current_date = datetime.strptime(date_match.group(1), "%d/%m/%Y").date()
 
                 routes = re.findall(r"([A-Z]{3})\s+-\s+([A-Z]{3})", line)
                 times = re.findall(r"A?(\d{2}:\d{2})", line)
@@ -75,6 +83,7 @@ def extract_flights(pdf):
                         "dep_time": dep_time,
                         "arr_time": arr_time
                     })
+
     return flights
 
 
@@ -112,7 +121,7 @@ def analyze_rotation(rot, allowances):
                 delta = (t2 - t1).seconds / 3600
                 if delta < 0:
                     delta += 24
-                if delta > 7:
+                if delta > 8:
                     nights_out += 1
 
     unique_countries = list(set(countries))

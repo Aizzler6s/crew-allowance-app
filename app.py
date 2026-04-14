@@ -4,9 +4,9 @@ import pandas as pd
 import re
 from datetime import datetime
 
-st.set_page_config(page_title="Crew Allowance Calculator V4", layout="wide")
+st.set_page_config(page_title="Crew Allowance Calculator V5", layout="wide")
 
-st.title("✈️ Crew Allowance Calculator V4 (LAYOVER INTELLIGENT)")
+st.title("✈️ Crew Allowance Calculator V5 (SIMPLE NIGHT LOGIC)")
 
 uploaded_file = st.file_uploader("Upload ton planning AIMS", type=["pdf"])
 allowance_file = st.file_uploader("Upload ton barème indemnités", type=["pdf", "csv"])
@@ -22,6 +22,7 @@ def load_allowances(file):
         df = pd.read_csv(file)
         for _, row in df.iterrows():
             allowances[row["Pays"]] = float(row["Montant"])
+
     else:
         with pdfplumber.open(file) as pdf:
             for page in pdf.pages:
@@ -101,69 +102,45 @@ def build_rotations(flights):
     return rotations
 
 
-# ---------------- LAYOVER DETECTION ----------------
-def detect_layover_type(f, next_f):
+# ---------------- NIGHT STOP LOGIC (ULTRA SIMPLE) ----------------
+def compute_night_stop(rot):
 
-    # sécurité
-    if not f["date"] or not next_f["date"]:
-        return "TRANSIT"
+    if not rot:
+        return 0
 
-    # build datetime si possible
-    if f["arr_time"] and next_f["dep_time"]:
-        t1 = datetime.combine(
-            f["date"],
-            datetime.strptime(f["arr_time"], "%H:%M").time()
-        )
+    # 👉 règle simple : dernier vol de la rotation
+    last_flight = rot[-1]
 
-        t2 = datetime.combine(
-            next_f["date"],
-            datetime.strptime(next_f["dep_time"], "%H:%M").time()
-        )
+    # si le dernier vol revient à CDG → PAS de night stop
+    if last_flight["arr"] == HOME_BASE:
+        return 0
 
-        hours = (t2 - t1).total_seconds() / 3600
-
-        if hours <= 6:
-            return "TRANSIT"
-        else:
-            return "LAYOVER_HOTEL"
-
-    # fallback jour
-    if (next_f["date"] - f["date"]).days >= 1:
-        return "LAYOVER_HOTEL"
-
-    return "TRANSIT"
+    # sinon → night stop
+    return 1
 
 
 # ---------------- ANALYSIS ----------------
 def analyze_rotation(rot, allowances):
 
     countries = []
-    layovers = 0
 
-    for i in range(len(rot)):
-        f = rot[i]
-
+    for f in rot:
         country = AIRPORT_COUNTRY.get(f["arr"])
         if country:
             countries.append(country)
 
-        # -------- LAYOVER LOGIC --------
-        if i < len(rot) - 1:
-            next_f = rot[i + 1]
-
-            if f["arr"] != HOME_BASE:
-                if detect_layover_type(f, next_f) == "LAYOVER_HOTEL":
-                    layovers += 1
-
     unique_countries = list(set(countries))
-    total_days = layovers + 1
+
+    # -------- NIGHT STOP --------
+    nights_out = compute_night_stop(rot)
+    total_days = nights_out + 1
 
     # -------- CAS LOGIC --------
     if rot[-1]["arr"] == HOME_BASE:
-        indemnities = total_days - 0.5   # Cas A
+        indemnities = total_days - 0.5
         case = "Cas A (retour CDG -0.5)"
     else:
-        indemnities = total_days         # Cas B
+        indemnities = total_days
         case = "Cas B (night stop)"
 
     # -------- RATE --------
@@ -183,7 +160,7 @@ def analyze_rotation(rot, allowances):
     return {
         "Route": " → ".join([f"{f['dep']}-{f['arr']}" for f in rot]),
         "Pays": ", ".join(unique_countries),
-        "Layovers hôtel": layovers,
+        "Night stop": nights_out,
         "Règle": case,
         "Indemnités": round(indemnities, 2),
         "Taux €": round(avg_rate, 2),

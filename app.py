@@ -99,49 +99,46 @@ def build_rotations(flights):
 
 
 # --- ANALYSIS (MODIFIÉE SELON TES RÈGLES) ---
-from datetime import datetime, timedelta
+def analyze_rotation(rot, allowances):
+    countries = []
+    nights_out = 0
 
-for i, f in enumerate(rot):
-    country = AIRPORT_COUNTRY.get(f["arr"], None)
-    if country:
-        countries.append(country)
+    for i, f in enumerate(rot):
+        country = AIRPORT_COUNTRY.get(f["arr"], None)
+        if country:
+            countries.append(country)
 
-    if i < len(rot) - 1:
-        next_f = rot[i + 1]
+        if i < len(rot) - 1:
+            next_f = rot[i + 1]
 
-        if f["arr_time"] and next_f["dep_time"] and f["date"] and next_f["date"]:
+            if f["arr_time"] and next_f["dep_time"] and f["date"] and next_f["date"]:
+                t1 = datetime.combine(
+                    f["date"],
+                    datetime.strptime(f["arr_time"], "%H:%M").time()
+                )
 
-            t1 = datetime.combine(
-                f["date"],
-                datetime.strptime(f["arr_time"], "%H:%M").time()
-            )
+                t2 = datetime.combine(
+                    next_f["date"],
+                    datetime.strptime(next_f["dep_time"], "%H:%M").time()
+                )
 
-            t2 = datetime.combine(
-                next_f["date"],
-                datetime.strptime(next_f["dep_time"], "%H:%M").time()
-            )
+                delta_hours = (t2 - t1).total_seconds() / 3600
 
-            delta_hours = (t2 - t1).total_seconds() / 3600
-
-            if delta_hours >= 8:
-                nights_out += 1
+                if delta_hours >= 8:
+                    nights_out += 1
 
     unique_countries = list(set(countries))
     total_days = nights_out + 1
 
-    # --- CAS LOGIC ---
     last_airport = rot[-1]["arr"]
 
     if last_airport == HOME_BASE:
-        # CAS A : retour CDG → -0.5
         indemnities = total_days - 0.5
         case = "Cas A (retour CDG -0.5)"
     else:
-        # CAS B : night stop / pas retour CDG immédiat
         indemnities = total_days
         case = "Cas B (night stop)"
 
-    # --- TAUX ---
     rates = []
     for c in unique_countries:
         for key in allowances:

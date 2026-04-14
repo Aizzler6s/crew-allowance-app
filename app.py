@@ -2,13 +2,12 @@ import streamlit as st
 import pdfplumber
 import pandas as pd
 import re
-from datetime import datetime
 
-st.set_page_config(page_title="Crew Allowance Calculator V5", layout="wide")
+st.set_page_config(page_title="Crew Allowance Table V6", layout="wide")
 
-st.title("✈️ Crew Allowance Calculator V5 (SIMPLE NIGHT LOGIC)")
+st.title("✈️ Crew Allowance Calculator V6 (TABLE FORMAT)")
 
-uploaded_file = st.file_uploader("Upload ton planning AIMS", type=["pdf"])
+uploaded_file = st.file_uploader("Upload ton planning AIMS (tableau horizontal)", type=["pdf"])
 allowance_file = st.file_uploader("Upload ton barème indemnités", type=["pdf", "csv"])
 
 HOME_BASE = "CDG"
@@ -22,7 +21,6 @@ def load_allowances(file):
         df = pd.read_csv(file)
         for _, row in df.iterrows():
             allowances[row["Pays"]] = float(row["Montant"])
-
     else:
         with pdfplumber.open(file) as pdf:
             for page in pdf.pages:
@@ -38,133 +36,52 @@ def load_allowances(file):
     return allowances
 
 
-# ---------------- AIRPORT MAP ----------------
-AIRPORT_COUNTRY = {
-    "CDG": "France", "NCE": "France", "LYS": "France", "NTE": "France",
-    "KRK": "Pologne", "RAK": "Maroc", "EDI": "Grande-Bretagne",
-    "LTN": "Grande-Bretagne", "LGW": "Grande-Bretagne",
-    "SSH": "Égypte", "RBA": "Maroc",
-    "LIN": "Italie", "MXP": "Italie", "GOA": "Italie",
-    "BUD": "Hongrie", "BEG": "Serbie"
-}
-
-
-# ---------------- PARSE AIMS ----------------
-def extract_flights(pdf_file):
-    flights = []
-    current_date = None
+# ---------------- PARSE TABLE AIMS ----------------
+def extract_table(pdf_file):
+    tables = []
 
     with pdfplumber.open(pdf_file) as pdf:
         for page in pdf.pages:
-            text = page.extract_text()
-            if not text:
-                continue
+            t = page.extract_table()
 
-            for line in text.split("\n"):
+            if t:
+                df = pd.DataFrame(t)
+                tables.append(df)
 
-                date_match = re.match(r"(\d{2}/\d{2}/\d{4})", line)
-                if date_match:
-                    current_date = datetime.strptime(date_match.group(1), "%d/%m/%Y").date()
+    if tables:
+        return pd.concat(tables, ignore_index=True)
 
-                routes = re.findall(r"([A-Z]{3})\s+-\s+([A-Z]{3})", line)
-                times = re.findall(r"A?(\d{2}:\d{2})", line)
-
-                for i, (dep, arr) in enumerate(routes):
-                    dep_time = times[i * 2] if len(times) > i * 2 else None
-                    arr_time = times[i * 2 + 1] if len(times) > i * 2 + 1 else None
-
-                    flights.append({
-                        "date": current_date,
-                        "dep": dep,
-                        "arr": arr,
-                        "dep_time": dep_time,
-                        "arr_time": arr_time
-                    })
-
-    return flights
+    return pd.DataFrame()
 
 
-# ---------------- ROTATIONS ----------------
-def build_rotations(flights):
-    rotations = []
-    current = []
+# ---------------- FIND CDG ----------------
+def analyze_table(df):
 
-    for f in flights:
-        current.append(f)
+    # flatten table
+    all_cells = df.astype(str).values.flatten()
 
-        if f["arr"] == HOME_BASE:
-            rotations.append(current)
-            current = []
+    all_cells = [c for c in all_cells if c and c != "None"]
 
-    if current:
-        rotations.append(current)
+    # detect if CDG appears
+    has_cdg = any(HOME_BASE in c for c in all_cells)
 
-    return rotations
+    # detect last column / last day logic
+    last_col = df.iloc[:, -1].astype(str)
 
+    last_has_cdg = any(HOME_BASE in str(x) for x in last_col)
 
-# ---------------- NIGHT STOP LOGIC (ULTRA SIMPLE) ----------------
-def compute_night_stop(rot):
-
-    if not rot:
-        return 0
-
-    # 👉 règle simple : dernier vol de la rotation
-    last_flight = rot[-1]
-
-    # si le dernier vol revient à CDG → PAS de night stop
-    if last_flight["arr"] == HOME_BASE:
-        return 0
-
-    # sinon → night stop
-    return 1
-
-
-# ---------------- ANALYSIS ----------------
-def analyze_rotation(rot, allowances):
-
-    countries = []
-
-    for f in rot:
-        country = AIRPORT_COUNTRY.get(f["arr"])
-        if country:
-            countries.append(country)
-
-    unique_countries = list(set(countries))
-
-    # -------- NIGHT STOP --------
-    nights_out = compute_night_stop(rot)
-    total_days = nights_out + 1
-
-    # -------- CAS LOGIC --------
-    if rot[-1]["arr"] == HOME_BASE:
-        indemnities = total_days - 0.5
+    # ---------------- NIGHT STOP LOGIC ----------------
+    if last_has_cdg:
+        nights = 0
         case = "Cas A (retour CDG -0.5)"
     else:
-        indemnities = total_days
+        nights = 1
         case = "Cas B (night stop)"
 
-    # -------- RATE --------
-    rates = []
-
-    for c in unique_countries:
-        for key in allowances:
-            if c.lower() in key.lower():
-                rates.append(allowances[key])
-
-    if not rates:
-        rates = [177]
-
-    avg_rate = sum(rates) / len(rates)
-    total_eur = indemnities * avg_rate
-
     return {
-        "Route": " → ".join([f"{f['dep']}-{f['arr']}" for f in rot]),
-        "Pays": ", ".join(unique_countries),
-        "Night stop": nights_out,
+        "Night stop": nights,
         "Règle": case,
-        "Indemnités": round(indemnities, 2),
-        "Taux €": round(avg_rate, 2),
-        "Total €": round(total_eur, 2)
+        "Analyse CDG fin tableau": last_has_cdg
     }
 
 
@@ -172,24 +89,15 @@ def analyze_rotation(rot, allowances):
 if uploaded_file and allowance_file:
 
     allowances = load_allowances(allowance_file)
-    flights = extract_flights(uploaded_file)
-    rotations = build_rotations(flights)
+    df = extract_table(uploaded_file)
 
-    results = [analyze_rotation(r, allowances) for r in rotations]
-    df = pd.DataFrame(results)
-
-    st.subheader("📊 Résultat détaillé")
+    st.subheader("📊 Tableau extrait AIMS")
     st.dataframe(df, use_container_width=True)
 
-    st.subheader("💰 Totaux")
-    st.metric("Total indemnités", round(df["Indemnités"].sum(), 2))
-    st.metric("Total €", f"{round(df['Total €'].sum(), 2)} €")
+    result = analyze_table(df)
 
-    st.download_button(
-        "📥 Télécharger CSV",
-        df.to_csv(index=False),
-        "indemnites.csv"
-    )
+    st.subheader("🧠 Résultat")
+    st.write(result)
 
 else:
-    st.info("Upload ton planning AIMS + ton barème pour lancer le calcul.")
+    st.info("Upload ton planning AIMS en tableau horizontal + barème")

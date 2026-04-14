@@ -34,7 +34,7 @@ def load_allowances(file):
 
     return allowances
 
-# --- AIRPORT → COUNTRY (to enrich over time) ---
+
 AIRPORT_COUNTRY = {
     "CDG":"France","NCE":"France","LYS":"France","NTE":"France",
     "KRK":"Pologne","RAK":"Maroc","EDI":"Grande-Bretagne","LTN":"Grande-Bretagne","LGW":"Grande-Bretagne",
@@ -77,7 +77,7 @@ def extract_flights(pdf):
                     })
     return flights
 
-# --- BUILD ROTATIONS ---
+
 def build_rotations(flights):
     rotations = []
     current = []
@@ -93,7 +93,8 @@ def build_rotations(flights):
 
     return rotations
 
-# --- ANALYSIS ---
+
+# --- ANALYSIS (MODIFIÉE SELON TES RÈGLES) ---
 def analyze_rotation(rot, allowances):
     countries = []
     nights_out = 0
@@ -117,16 +118,19 @@ def analyze_rotation(rot, allowances):
     unique_countries = list(set(countries))
     total_days = nights_out + 1
 
-    euro_only = all(c in EURO_COUNTRIES for c in unique_countries if c)
+    # --- CAS LOGIC ---
+    last_airport = rot[-1]["arr"]
 
-    if euro_only:
+    if last_airport == HOME_BASE:
+        # CAS A : retour CDG → -0.5
         indemnities = total_days - 0.5
-        case = "Cas 1"
+        case = "Cas A (retour CDG -0.5)"
     else:
+        # CAS B : night stop / pas retour CDG immédiat
         indemnities = total_days
-        case = "Cas 2"
+        case = "Cas B (night stop)"
 
-    # --- REAL RATE ---
+    # --- TAUX ---
     rates = []
     for c in unique_countries:
         for key in allowances:
@@ -136,7 +140,7 @@ def analyze_rotation(rot, allowances):
     if not rates:
         rates = [177]
 
-    avg_rate = sum(rates)/len(rates)
+    avg_rate = sum(rates) / len(rates)
     total_eur = indemnities * avg_rate
 
     return {
@@ -145,10 +149,11 @@ def analyze_rotation(rot, allowances):
         "Jours": total_days,
         "Nuits dehors": nights_out,
         "Règle": case,
-        "Indemnités": round(indemnities,2),
-        "Taux €": round(avg_rate,2),
-        "Total €": round(total_eur,2)
+        "Indemnités": round(indemnities, 2),
+        "Taux €": round(avg_rate, 2),
+        "Total €": round(total_eur, 2)
     }
+
 
 # --- MAIN ---
 if uploaded_file and allowance_file:

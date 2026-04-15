@@ -1,154 +1,35 @@
 import streamlit as st
 import pandas as pd
-import pdfplumber
-import re
+from parser import (
+    extract_text_from_pdf,
+    parse_flights,
+    group_by_day,
+    compute_night_stops,
+    build_dataframe
+)
 
-st.set_page_config(page_title="Crew Allowance XLS", layout="wide")
+st.set_page_config(page_title="Crew Planning Analyzer")
 
-st.title("✈️ Crew Allowance Calculator (XLS + BARÈME)")
+st.title("✈️ Crew Planning Analyzer")
 
-uploaded_file = st.file_uploader("Upload ton planning Excel", type=["xlsx", "xls"])
-allowance_file = st.file_uploader("Upload ton barème indemnités", type=["pdf", "csv"])
+uploaded_file = st.file_uploader("Upload your planning PDF", type="pdf")
 
-HOME_BASE = "CDG"
+if uploaded_file:
 
+    text = extract_text_from_pdf(uploaded_file)
 
-# ---------------- BARÈME ----------------
-def load_allowances(file):
-    allowances = {}
+    flights = parse_flights(text)
 
-    if file.name.endswith(".csv"):
-        df = pd.read_csv(file)
-        for _, row in df.iterrows():
-            allowances[row["Pays"]] = float(row["Montant"])
-    else:
-        with pdfplumber.open(file) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text()
-                if not text:
-                    continue
+    days_data = group_by_day(text, flights)
 
-                for line in text.split("\n"):
-                    matches = re.findall(r"([A-Za-z\-\(\) ]+)\s+(\d{2,3}) €", line)
-                    for country, value in matches:
-                        allowances[country.strip()] = float(value)
+    days_data = compute_night_stops(days_data)
 
-    return allowances
+    df = build_dataframe(days_data)
 
+    st.subheader("📊 Rotations")
 
-# ---------------- AIRPORT MAP ----------------
-AIRPORT_COUNTRY = {
-    "CDG": "France", "NCE": "France", "LYS": "France", "NTE": "France",
-    "KRK": "Pologne", "RAK": "Maroc", "EDI": "Grande-Bretagne",
-    "LTN": "Grande-Bretagne", "LGW": "Grande-Bretagne",
-    "SSH": "Égypte", "RBA": "Maroc",
-    "LIN": "Italie", "MXP": "Italie", "GOA": "Italie",
-    "BUD": "Hongrie", "BEG": "Serbie"
-}
+    st.dataframe(df)
 
+    total_ns = df["night_stop"].sum()
 
-# ---------------- ANALYSE EXCEL ----------------
-def analyze_excel(df, allowances):
-
-    results = []
-
-    # 🔥 FIX erreurs float
-    df = df.fillna("").astype(str)
-
-    for col in df.columns:
-
-        col_data = df[col]
-
-        # ignorer colonne vide
-        if not any(cell.strip() for cell in col_data):
-            continue
-
-        cells = col_data.tolist()
-
-        # ---------------- ROUTES ----------------
-        routes = []
-        for cell in cells:
-            matches = re.findall(r"([A-Z]{3})-([A-Z]{3})", cell)
-            for dep, arr in matches:
-                routes.append(f"{dep}-{arr}")
-
-        # ---------------- PAYS ----------------
-        countries = []
-        for cell in cells:
-            for airport in AIRPORT_COUNTRY:
-                if airport in cell:
-                    countries.append(AIRPORT_COUNTRY[airport])
-
-        unique_countries = list(set(countries))
-
-        # ---------------- NIGHT STOP ----------------
-        has_cdg = any("CDG" in cell for cell in cells)
-
-        if has_cdg:
-            indemnities = 1 - 0.5
-            case = "Cas A (retour CDG -0.5)"
-            nights = 0
-        else:
-            indemnities = 1
-            case = "Cas B (night stop)"
-            nights = 1
-
-        # ---------------- TAUX ----------------
-        rates = []
-
-        for c in unique_countries:
-            for key in allowances:
-                if c.lower() in key.lower():
-                    rates.append(allowances[key])
-
-        if not rates:
-            rates = [177]
-
-        avg_rate = sum(rates) / len(rates)
-        total_eur = indemnities * avg_rate
-
-        results.append({
-            "Jour": col,
-            "Routes": " → ".join(routes),
-            "Pays": ", ".join(unique_countries),
-            "Night stop": nights,
-            "Règle": case,
-            "Indemnités": round(indemnities, 2),
-            "Taux €": round(avg_rate, 2),
-            "Total €": round(total_eur, 2)
-        })
-
-    return pd.DataFrame(results)
-
-
-# ---------------- MAIN ----------------
-if uploaded_file and allowance_file:
-
-    # gestion XLS / XLSX
-    if uploaded_file.name.endswith(".xls"):
-        df = pd.read_excel(uploaded_file, engine="xlrd", header=None)
-    else:
-        df = pd.read_excel(uploaded_file, engine="openpyxl", header=None)
-
-    allowances = load_allowances(allowance_file)
-
-    st.subheader("📊 Planning")
-    st.dataframe(df, use_container_width=True)
-
-    df_results = analyze_excel(df, allowances)
-
-    st.subheader("📊 Résultat détaillé")
-    st.dataframe(df_results, use_container_width=True)
-
-    st.subheader("💰 Totaux")
-    st.metric("Total indemnités", round(df_results["Indemnités"].sum(), 2))
-    st.metric("Total €", f"{round(df_results['Total €'].sum(), 2)} €")
-
-    st.download_button(
-        "📥 Télécharger CSV",
-        df_results.to_csv(index=False),
-        "indemnites.csv"
-    )
-
-else:
-    st.info("Upload ton planning Excel + ton barème")
+    st.metric("🌙 Total Night Stops", total_ns)

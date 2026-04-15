@@ -1,5 +1,4 @@
 import streamlit as st
-import pandas as pd
 from parser import (
     extract_text_from_pdf,
     extract_flights_with_time,
@@ -7,18 +6,37 @@ from parser import (
     build_dataframe
 )
 
-...
+st.set_page_config(page_title="Crew Planning Analyzer")
 
-if uploaded_file:
+st.title("✈️ Crew Planning Analyzer")
 
-    text = extract_text_from_pdf(uploaded_file)
+uploaded_file = st.file_uploader("Upload your planning PDF", type="pdf")
 
-    flights = extract_flights_with_time(text)
+if uploaded_file is not None:
+    uploaded_file.seek(0)
 
-    days = group_into_days(flights)
+    try:
+        # Extract text
+        text = extract_text_from_pdf(uploaded_file)
 
-    df = build_dataframe(days)
+        # Extract flights
+        flights = extract_flights_with_time(text)
 
-    st.dataframe(df)
+        if not flights:
+            st.error("❌ Aucun vol détecté dans le PDF")
+        else:
+            # Group into days
+            days = group_into_days(flights)
 
-    st.metric("🌙 Night Stops", df["night_stop"].sum())
+            # Build dataframe
+            df = build_dataframe(days)
+
+            st.subheader("📊 Rotations")
+            st.dataframe(df, use_container_width=True)
+
+            # Metrics
+            total_ns = df["night_stop"].sum()
+            st.metric("🌙 Night Stops", total_ns)
+
+    except Exception as e:
+        st.error(f"Erreur : {e}")

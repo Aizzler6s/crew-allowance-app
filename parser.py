@@ -7,21 +7,23 @@ def extract_text_from_pdf(pdf_file):
     text = ""
     with pdfplumber.open(pdf_file) as pdf:
         for page in pdf.pages:
-            text += page.extract_text() + "\n"
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
     return text
 
 
 def extract_flights_with_time(text):
     """
-    Extract flights with departure, arrival + time
-    Example:
-    CDG KRK A06:27 → CDG → KRK at 06:27
+    Extract flights with:
+    - departure
+    - arrival
+    - arrival time (Axx:xx)
     """
 
     pattern = re.findall(
-        r"([A-Z]{3})\s+([A-Z]{3}).*?A(\d{2}:\d{2})",
-        text,
-        re.DOTALL
+        r"\b([A-Z]{3})\s+([A-Z]{3})\s+A(\d{2}:\d{2})",
+        text
     )
 
     flights = []
@@ -43,37 +45,38 @@ def time_to_minutes(t):
 
 def group_into_days(flights):
     """
-    New logic:
-    - if gap between flights > 8h → new day
-    - if dep != previous arrival → new duty/day
+    Logic:
+    - New day if:
+        - gap > 8h
+        - OR route break (dep != previous arrival)
     """
 
+    if not flights:
+        return []
+
     days = []
-    current_day = []
+    current_day = [flights[0]]
 
-    for i, flight in enumerate(flights):
-
-        if i == 0:
-            current_day.append(flight)
-            continue
-
+    for i in range(1, len(flights)):
         prev = flights[i - 1]
+        curr = flights[i]
 
-        time_gap = time_to_minutes(flight["time"]) - time_to_minutes(prev["time"])
+        prev_time = time_to_minutes(prev["time"])
+        curr_time = time_to_minutes(curr["time"])
 
-        # handle midnight wrap
-        if time_gap < 0:
-            time_gap += 24 * 60
+        gap = curr_time - prev_time
 
-        # RULES 👇
-        if time_gap > 480 or flight["dep"] != prev["arr"]:
+        # Handle overnight
+        if gap < 0:
+            gap += 24 * 60
+
+        if gap > 480 or curr["dep"] != prev["arr"]:
             days.append(current_day)
-            current_day = [flight]
+            current_day = [curr]
         else:
-            current_day.append(flight)
+            current_day.append(curr)
 
-    if current_day:
-        days.append(current_day)
+    days.append(current_day)
 
     return days
 

@@ -11,61 +11,85 @@ def extract_text_from_pdf(pdf_file):
     return text
 
 
-def parse_flights(text):
+def extract_flights_with_time(text):
     """
-    Extract flights like:
-    CDG -> KRK
-    KRK -> CDG
+    Extract flights with departure, arrival + time
+    Example:
+    CDG KRK A06:27 → CDG → KRK at 06:27
     """
-    pattern = re.findall(r"\b([A-Z]{3})\s+([A-Z]{3})\b", text)
+
+    pattern = re.findall(
+        r"([A-Z]{3})\s+([A-Z]{3}).*?A(\d{2}:\d{2})",
+        text,
+        re.DOTALL
+    )
 
     flights = []
-    for dep, arr in pattern:
-        flights.append((dep, arr))
+
+    for dep, arr, time in pattern:
+        flights.append({
+            "dep": dep,
+            "arr": arr,
+            "time": time
+        })
 
     return flights
 
 
-def group_by_day(text, flights):
+def time_to_minutes(t):
+    h, m = map(int, t.split(":"))
+    return h * 60 + m
+
+
+def group_into_days(flights):
     """
-    Split roughly by days using dates (01/03 etc.)
+    New logic:
+    - if gap between flights > 8h → new day
+    - if dep != previous arrival → new duty/day
     """
-    days = re.split(r"\d{2}/\d{2}", text)
 
-    results = []
+    days = []
+    current_day = []
 
-    flight_index = 0
+    for i, flight in enumerate(flights):
 
-    for i, day_text in enumerate(days[1:], start=1):
-        day_flights = []
+        if i == 0:
+            current_day.append(flight)
+            continue
 
-        # heuristic: take next flights until next block
-        for _ in range(6):  # max flights/day (safe)
-            if flight_index < len(flights):
-                dep, arr = flights[flight_index]
-                day_flights.append(f"{dep}-{arr}")
-                flight_index += 1
+        prev = flights[i - 1]
 
-        if day_flights:
-            results.append({
-                "day": i,
-                "rotation": " → ".join(day_flights),
-                "last_dest": day_flights[-1].split("-")[1]
-            })
+        time_gap = time_to_minutes(flight["time"]) - time_to_minutes(prev["time"])
 
-    return results
+        # handle midnight wrap
+        if time_gap < 0:
+            time_gap += 24 * 60
 
-
-def compute_night_stops(days_data):
-    for day in days_data:
-        if day["last_dest"] != "CDG":
-            day["night_stop"] = 1
+        # RULES 👇
+        if time_gap > 480 or flight["dep"] != prev["arr"]:
+            days.append(current_day)
+            current_day = [flight]
         else:
-            day["night_stop"] = 0
+            current_day.append(flight)
 
-    return days_data
+    if current_day:
+        days.append(current_day)
+
+    return days
 
 
-def build_dataframe(days_data):
-    df = pd.DataFrame(days_data)
-    return df
+def build_dataframe(days):
+    data = []
+
+    for i, day in enumerate(days, start=1):
+        rotation = " → ".join([f"{f['dep']}-{f['arr']}" for f in day])
+        last_dest = day[-1]["arr"]
+
+        data.append({
+            "day": i,
+            "rotation": rotation,
+            "last_dest": last_dest,
+            "night_stop": 1 if last_dest != "CDG" else 0
+        })
+
+    return pd.DataFrame(data)
